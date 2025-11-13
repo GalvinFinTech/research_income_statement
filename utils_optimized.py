@@ -1097,7 +1097,8 @@ def generate_professional_growth_chart_v5(
             df_plot_agg_filtered, x='TimePeriod', y=plot_col_name, color='NhomPhanTich',
             color_discrete_sequence=color_sequence, 
             markers=True,          
-            line_shape='linear',   # Giữ 'linear' (thẳng)
+            #line_shape='linear',   # Giữ 'linear' (thẳng)
+            line_shape='spline',# <-- Đổi 'linear' TRỞ LẠI 'spline'
             title=f'<b>Tăng trưởng Tổng {metric_title} YoY theo Nhóm Phân tích</b><br><sup><i>Phương pháp: (Hiện tại - Trước) / |Trước|, giai đoạn {start_period_label}-{end_period_label}</i></sup>',
             labels={'TimePeriod': '', plot_col_name: 'Tăng trưởng YoY (%)', 'NhomPhanTich': ''},
             template='plotly_white'
