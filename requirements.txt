@@ -1,0 +1,7 @@
+# requirements.txt
+streamlit
+pandas
+plotly
+joblib
+pyarrow
+numpy
