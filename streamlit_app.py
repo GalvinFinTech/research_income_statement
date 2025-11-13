@@ -1,3 +1,13 @@
+# Thêm thư mục gốc của dự án vào Python Path để đảm bảo tìm thấy các module local
+import sys
+import os
+
+# Lấy đường dẫn tuyệt đối đến thư mục hiện tại (nơi streamlit_app.py đang chạy)
+current_dir = os.path.dirname(os.path.abspath(__file__))
+# Thêm đường dẫn này vào Python path
+sys.path.append(current_dir)
+# Sau đó, mới thực hiện các import khác
+
 # streamlit_app.py (Phiên bản 2.0 - Hybrid)
 import streamlit as st
 import pandas as pd
