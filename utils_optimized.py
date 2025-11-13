@@ -6,6 +6,60 @@ from typing import List, Dict, Optional, Union
 import plotly.express as px
 import plotly.graph_objects as go
 
+
+# Function to get latest reporters with stats
+def get_latest_reporters_with_stats(sql_connection_string: str, current_year: int, current_quarter: str, term_type_filter: int = -1) -> pd.DataFrame:
+    sql_query = f"""
+    DECLARE @CurrentYear int = {current_year};
+    DECLARE @CurrentQuarter varchar(2) = '{current_quarter}';
+    DECLARE @TermTypeFilter int = {term_type_filter};
+
+    SELECT 
+        c.CompanyCode AS MaCoPhieu,
+        c.FullName AS TenCongTy,
+        bt.Description AS LoaiHinhCongTy,
+        ci.Name AS TenNganh,
+        ci2.Name AS TenNganhCon,
+        rd.YearPeriod AS NamBaoCao,
+        rt.TermCode AS KyBaoCao,
+        rd.LastUpdate AS NgayCongBo,
+        rd.MarketCap AS VonHoa 
+    FROM VSTDataFeed.dbo.Company c WITH (NOLOCK)
+    INNER JOIN VSTDataFeed.dbo.ReportData rd WITH (NOLOCK) 
+        ON rd.CompanyID = c.CompanyID
+    INNER JOIN VSTDataFeed.dbo.ReportTerm rt WITH (NOLOCK) 
+        ON rt.ReportTermID = rd.ReportTermID
+    LEFT JOIN VSTDataFeed.dbo.BusinessType bt WITH (NOLOCK) 
+        ON bt.BusinessTypeID = c.CompanyType + 1
+    LEFT JOIN VSTDataFeed.dbo.ChannelIndustry ci WITH (NOLOCK) 
+        ON ci.IndustryID = c.IndustryID
+    LEFT JOIN VSTDataFeed.dbo.ChannelIndustry ci2 WITH (NOLOCK) 
+        ON ci2.IndustryID = c.SubIndustry
+    WHERE 
+        c.Status = 1 
+        AND c.CatID IN (1, 2, 5)
+        AND rd.IsUnited IN (0, 1)
+        AND rd.YearPeriod = @CurrentYear
+        AND (
+            (@TermTypeFilter = 2 AND rt.TermCode = @CurrentQuarter) 
+            OR (@TermTypeFilter = 1 AND rt.ReportTermTypeID = 1) 
+            OR @TermTypeFilter = -1
+        )
+    GROUP BY 
+        c.CompanyCode, c.FullName, bt.Description, ci.Name, ci2.Name,
+        rd.YearPeriod, rt.TermCode, rd.LastUpdate, rd.MarketCap
+    ORDER BY rd.LastUpdate DESC;
+    """
+    try:
+        conn = pyodbc.connect(sql_connection_string)
+        df = pd.read_sql(sql_query, conn)
+        conn.close()
+        return df
+    except Exception as e:
+        print(f"Error executing SQL query: {e}")
+        return pd.DataFrame()
+
+# Function to get core financials by list
 # Function to get core financials by list
 def get_core_financials_by_list(sql_connection_string: str, stock_codes_list: List[str], start_year: int = 2020, unit: int = 1000000) -> pd.DataFrame:
     if not stock_codes_list:
@@ -20,7 +74,7 @@ def get_core_financials_by_list(sql_connection_string: str, stock_codes_list: Li
     DECLARE @VonHoaUnit BIGINT = {unit};
 
     WITH CompanyInfo AS (
-        SELECT CompanyID, CompanyCode, CompanyType, IndustryID, FullName --- # THÊM VÀO ---
+        SELECT CompanyID, CompanyCode, CompanyType, IndustryID, FullName
         FROM VSTDataFeed.dbo.Company ci WITH (NOLOCK)
         WHERE ci.Status = 1 AND ci.CatID IN (1, 2, 5)
           AND ci.CompanyCode IN ({codes_string_sql})
@@ -30,7 +84,9 @@ def get_core_financials_by_list(sql_connection_string: str, stock_codes_list: Li
             rd.ReportDataID, rd.CompanyID, rd.YearPeriod, rt.TermCode, rd.IsUnited,
             ROW_NUMBER() OVER (
                 PARTITION BY rd.CompanyID, rd.YearPeriod, rt.ReportTermID
-                ORDER BY rd.IsUnited ASC, rd.ReportDataID DESC
+                ORDER BY 
+                    rd.IsUnited ASC, 
+                    rd.ReportDataID DESC
             ) AS Rank
         FROM VSTDataFeed.dbo.ReportData rd WITH (NOLOCK)
         INNER JOIN CompanyInfo ci ON ci.CompanyID = rd.CompanyID
@@ -57,10 +113,10 @@ def get_core_financials_by_list(sql_connection_string: str, stock_codes_list: Li
     FinancialData AS (
         SELECT
             ci.CompanyCode AS MaCoPhieu,
-            ci.FullName AS TenCongTy, --- # THÊM VÀO ---
+            ci.FullName AS TenCongTy,
             rr.YearPeriod AS Nam,
             rr.TermCode AS Quy,
-            CASE rr.IsUnited WHEN 0 THEN N'HN' ELSE N'ĐL' END AS LoaiBaoCao,
+            CASE rr.IsUnited WHEN 0 THEN N'ĐL' ELSE N'HN' END AS LoaiBaoCao,
             COALESCE(ns.NormName, rn.Name, n.NormName) AS TenChiTieu,
             ROUND(ISNULL(rdd.Value, 0) / @Unit, 2) AS GiaTri,
             ISNULL(mcl.VonHoaMoiNhat, 0.00) AS VonHoa
@@ -83,20 +139,54 @@ def get_core_financials_by_list(sql_connection_string: str, stock_codes_list: Li
                  (ci.CompanyType = 4 AND rn.ReportNormID = ns.ReportNormID_BH) )
         LEFT JOIN MarketCapLatest mcl ON mcl.CompanyID = ci.CompanyID
         WHERE rr.Rank = 1 AND rct.Code = 'KQ'
-            AND COALESCE(ns.NormName, rn.Name, n.NormName) IN (
-                N'Doanh thu thuần', N'3. Doanh thu thuần', N'3. Doanh thu thuần về bán hàng và cung cấp dịch vụ', N'3, Doanh thu thuần về hoạt động kinh doanh(10=01-02)',
+          AND COALESCE(ns.NormName, rn.Name, n.NormName) IN (
+                N'Doanh thu thuần', N'3. Doanh thu thuần', N'3. Doanh thu thuần về bán hàng và cung cấp dịch vụ', 
+                N'3, Doanh thu thuần về hoạt động kinh doanh(10=01-02)',
                 N'III. Thu nhập lãi thuần (I-II)',
-                N'13, Tổng lợi nhuận kế toán trước thuế (50=30+40+41)', N'15. Tổng lợi nhuận kế toán trước thuế', N'26. Tổng lợi nhuận kế toán trước thuế', N'Tổng lợi nhuận trước thuế thu nhập doanh nghiệp', N'IX. TỔNG LỢI NHUẬN KẾ TOÁN TRƯỚC THUẾ (70+80)', N'XI. Tổng lợi nhuận trước thuế (IX-X)', N'III. Lợi nhuận trước thuế',
-                N'16, Lợi nhuận sau thuế thu nhập doanh nghiệp (60=50-51-52)', N'17. Lợi nhuận sau thuế thu nhập doanh nghiệp', N'29. Lợi nhuận sau thuế thu nhập doanh nghiệp', N'IV. Lợi nhuận sau thuế', N'XI. LỢI NHUẬN KẾ TOÁN SAU THUẾ TNDN (90-100)', N'XIII. Lợi nhuận sau thuế (XI-XII)', N'18.2 Lợi nhuận sau thuế của cổ đông của Công ty mẹ', N'31. Lợi nhuận sau thuế của cổ đông của Công ty mẹ', N'VII. Lợi nhuận sau thuế của cổ đông công ty mẹ', N'XV. Lợi nhuận sau thuế của cổ đông của Ngân hàng mẹ (XIII-XIV)'
-            )
+
+                N'13, Tổng lợi nhuận kế toán trước thuế (50=30+40+41)', N'15. Tổng lợi nhuận kế toán trước thuế', 
+                N'26. Tổng lợi nhuận kế toán trước thuế', N'Tổng lợi nhuận trước thuế thu nhập doanh nghiệp', 
+                N'IX. TỔNG LỢI NHUẬN KẾ TOÁN TRƯỚC THUẾ (70+80)', N'XI. Tổng lợi nhuận trước thuế (IX-X)', 
+                N'III. Lợi nhuận trước thuế',
+
+                N'18.2 Lợi nhuận sau thuế của cổ đông của Công ty mẹ', 
+                N'31. Lợi nhuận sau thuế của cổ đông của Công ty mẹ', 
+                N'VII. Lợi nhuận sau thuế của cổ đông công ty mẹ', 
+                N'XV. Lợi nhuận sau thuế của cổ đông của Ngân hàng mẹ (XIII-XIV)',
+                
+                N'16, Lợi nhuận sau thuế thu nhập doanh nghiệp (60=50-51-52)', 
+                N'17. Lợi nhuận sau thuế thu nhập doanh nghiệp', 
+                N'29. Lợi nhuận sau thuế thu nhập doanh nghiệp', 
+                N'IV. Lợi nhuận sau thuế', 
+                N'XI. LỢI NHUẬN KẾ TOÁN SAU THUẾ TNDN (90-100)', 
+                N'XIII. Lợi nhuận sau thuế (XI-XII)'
+          )
     )
     SELECT
         MaCoPhieu, Nam, Quy, LoaiBaoCao,
-        MAX(TenCongTy) AS TenCongTy, --- # THÊM VÀO ---
+        MAX(TenCongTy) AS TenCongTy,
         MAX(VonHoa) AS VonHoa,
         ISNULL(MAX(CASE WHEN TenChiTieu IN (N'Doanh thu thuần', N'3. Doanh thu thuần', N'3. Doanh thu thuần về bán hàng và cung cấp dịch vụ', N'3, Doanh thu thuần về hoạt động kinh doanh(10=01-02)', N'III. Thu nhập lãi thuần (I-II)') THEN GiaTri END), 0) AS DoanhThuThuan,
         ISNULL(MAX(CASE WHEN TenChiTieu IN (N'13, Tổng lợi nhuận kế toán trước thuế (50=30+40+41)', N'15. Tổng lợi nhuận kế toán trước thuế', N'26. Tổng lợi nhuận kế toán trước thuế', N'Tổng lợi nhuận trước thuế thu nhập doanh nghiệp', N'IX. TỔNG LỢI NHUẬN KẾ TOÁN TRƯỚC THUẾ (70+80)', N'XI. Tổng lợi nhuận trước thuế (IX-X)', N'III. Lợi nhuận trước thuế') THEN GiaTri END), 0) AS LoiNhuanTruocThue,
-        ISNULL(MAX(CASE WHEN TenChiTieu IN (N'16, Lợi nhuận sau thuế thu nhập doanh nghiệp (60=50-51-52)', N'17. Lợi nhuận sau thuế thu nhập doanh nghiệp', N'29. Lợi nhuận sau thuế thu nhập doanh nghiệp', N'IV. Lợi nhuận sau thuế', N'XI. LỢI NHUẬN KẾ TOÁN SAU THUẾ TNDN (90-100)', N'XIII. Lợi nhuận sau thuế (XI-XII)', N'18.2 Lợi nhuận sau thuế của cổ đông của Công ty mẹ', N'31. Lợi nhuận sau thuế của cổ đông của Công ty mẹ', N'VII. Lợi nhuận sau thuế của cổ đông công ty mẹ', N'XV. Lợi nhuận sau thuế của cổ đông của Ngân hàng mẹ (XIII-XIV)') THEN GiaTri END), 0) AS LoiNhuanSauThue
+        ISNULL(MAX(CASE 
+            WHEN TenChiTieu IN (
+                N'18.2 Lợi nhuận sau thuế của cổ đông của Công ty mẹ', 
+                N'31. Lợi nhuận sau thuế của cổ đông của Công ty mẹ', 
+                N'VII. Lợi nhuận sau thuế của cổ đông công ty mẹ', 
+                N'XV. Lợi nhuận sau thuế của cổ đông của Ngân hàng mẹ (XIII-XIV)'
+            ) THEN GiaTri 
+        END), 
+        ISNULL(MAX(CASE 
+            WHEN TenChiTieu IN (
+                N'16, Lợi nhuận sau thuế thu nhập doanh nghiệp (60=50-51-52)', 
+                N'17. Lợi nhuận sau thuế thu nhập doanh nghiệp', 
+                N'29. Lợi nhuận sau thuế thu nhập doanh nghiệp', 
+                N'IV. Lợi nhuận sau thuế', 
+                N'XI. LỢI NHUẬN KẾ TOÁN SAU THUẾ TNDN (90-100)', 
+                N'XIII. Lợi nhuận sau thuế (XI-XII)'
+            ) THEN GiaTri 
+        END), 0)
+    ) AS LoiNhuanSauThue
     FROM FinancialData
     GROUP BY MaCoPhieu, Nam, Quy, LoaiBaoCao
     ORDER BY MaCoPhieu ASC, Nam DESC,
@@ -104,13 +194,13 @@ def get_core_financials_by_list(sql_connection_string: str, stock_codes_list: Li
     """
     try:
         conn = pyodbc.connect(sql_connection_string, fast_executemany=True)
-        print(f"Executing V3 query (prioritizing consolidated reports + market cap) for {len(stock_codes_list)} stocks...")
+        print(f"Executing V4 query (FIXED: Prioritizing Consolidated + Parent Profit) for {len(stock_codes_list)} stocks...")
         df = pd.read_sql(sql_template, conn)
         conn.close()
         print(f"✅ Query successful! Retrieved {len(df):,} rows.")
         return df
     except Exception as e:
-        print(f"❌ Error executing SQL V3 query: {e}")
+        print(f"❌ Error executing SQL V4 query: {e}")
         try: conn.close()
         except: pass
         return pd.DataFrame()
@@ -282,12 +372,13 @@ def calculate_industry_growth_rates_abs_base(df, industry_col='Phân ngành - IC
     print("Report completed.")
     return df_final
 
-
 def plot_growth_by_industry_plotly_v5(df_industry_summary, growth_type='YoY (All) %', metric='Doanh thu thuần / Thu nhập lãi thuần'):
-    valid_types = ['QoQ (All) %', 'YoY (All) %', 'YoY (Same Firms) %', 'YTD (All) %']
-    if growth_type not in valid_types:
-        raise ValueError(f"❌ Invalid growth type: {valid_types}")
-
+    # Màu sắc cố định (Monochromatic - Chỉ dùng Xanh dương và biến thể)
+    DEFAULT_BAR_COLOR = '#1569B4'       # Blue (Màu chuẩn)
+    MARKET_COLOR = '#034EA2'            # Dark Blue (Market - Màu đậm hơn)
+    NEGATIVE_COLOR = '#9c2f0f'          # Maroon/Dark Red (Thay thế màu cam, ít xung đột hơn)
+    
+    # ... (Code xử lý dữ liệu từ V14 - Giữ nguyên logic) ...
     df_plot = df_industry_summary.copy()
     df_plot[growth_type] = (
         df_plot[growth_type]
@@ -297,10 +388,8 @@ def plot_growth_by_industry_plotly_v5(df_industry_summary, growth_type='YoY (All
         .astype(float)
     )
     df_metric = df_plot[df_plot['Chỉ tiêu'].str.strip() == metric.strip()].dropna(subset=[growth_type])
-
-    if df_metric.empty:
-        print(f"⚠️ No data for '{metric}' ({growth_type}). Available: {df_plot['Chỉ tiêu'].str.strip().unique()}")
-        return None
+    
+    # ... (Code cho col_firms, sắp xếp rows) ...
 
     col_firms = {
         'QoQ': 'Số công ty có dữ liệu Q_prev(QoQ)',
@@ -313,71 +402,84 @@ def plot_growth_by_industry_plotly_v5(df_industry_summary, growth_type='YoY (All
     industry_rows = df_metric[df_metric['Phân loại'] != 'Toàn thị trường']
     df_metric = pd.concat([industry_rows, market_row]).reset_index(drop=True)
 
-    # Gán màu cho từng loại
-    df_metric['color_category'] = (
-        df_metric[growth_type]
-        .mask(df_metric['Phân loại'] == 'Toàn thị trường', 'Toàn thị trường')
-        .mask(df_metric[growth_type] >= 0, 'Tăng')
-        .mask(df_metric[growth_type] < 0, 'Giảm')
-    )
+    # --- Gán màu theo xu hướng (Màu mới) ---
+    def get_bar_color(row):
+        if row['Phân loại'] == 'Toàn thị trường':
+            return MARKET_COLOR
+        elif row[growth_type] < 0:
+            return NEGATIVE_COLOR
+        else:
+            return DEFAULT_BAR_COLOR
 
-    color_map = {'Tăng': '#1f77b4', 'Giảm': '#ff7f0e', 'Toàn thị trường': '#2ca02c'}
-
+    df_metric['BarColor'] = df_metric.apply(get_bar_color, axis=1)
+    
+    # --- Vẽ biểu đồ ---
     fig = px.bar(
         df_metric,
-        x=growth_type, y='Phân loại', orientation='h',
-        color='color_category', color_discrete_map=color_map,
+        x=growth_type, 
+        y='Phân loại', 
+        orientation='h',
+        color='BarColor',                      # Sử dụng cột màu mới
+        color_discrete_map='identity',         # Ánh xạ màu 1-1
         text=df_metric[growth_type].map(lambda x: f"{x:.1f}%"),
         hover_data=['Phân loại', 'Chỉ tiêu', growth_type, col_firms],
         title=f"Tăng trưởng {metric} theo ngành - {growth_type}",
-        template='plotly_white'
+        template='plotly_white' 
     )
-
-    # Cập nhật định dạng biểu đồ
+    
+    # --- Cập nhật Traces (TEXT INSIDE FIX) ---
     fig.update_traces(
-        textposition='outside',
-        insidetextanchor='middle',
-        textfont=dict(size=12, color='black'),
-        hovertemplate="<b>%{y}</b><br>%{x:.2f}% tăng trưởng<extra></extra>",
-        marker_line_color=[
-            'black' if x == 'Toàn thị trường' else 'rgba(0,0,0,0)'
-            for x in df_metric['Phân loại']
-        ],
-        marker_line_width=[
-            1.5 if x == 'Toàn thị trường' else 0
-            for x in df_metric['Phân loại']
-        ]
+        # KHẮC PHỤC DỨT ĐIỂM MÀU CHỮ: Đẩy chữ vào trong cột
+        # Chữ sẽ tự động là màu trắng, nổi bật trên màu Bar.
+        textposition='inside',
+        insidetextanchor='start', # Bắt đầu từ bên trong cột
+        
+        # Bỏ màu chữ cứng, Plotly sẽ tự chọn màu tương phản cho text inside
+        textfont=dict(size=12, color='white'), 
+        
+        hovertemplate="<b>%{y}</b><br>Tăng trưởng: %{x:.2f}%<extra></extra>",
+        
+        # Thêm hiệu ứng viền để cột sắc nét
+        marker_line_color=df_metric['BarColor'].tolist(),
+        marker_line_width=1.5,
+        marker_opacity=0.9,
     )
 
-    # Cập nhật layout
+    # --- Cập nhật Layout (Xóa bỏ màu cứng khỏi Trục) ---
     fig.update_layout(
-        font=dict(family="Arial", size=13, color="#2c3e50"),
-        
+        font=dict(family="Arial", size=13), 
         xaxis_title=growth_type,
         yaxis_title='Ngành',
-        bargap=0.15,
+        bargap=0.2, 
         height=max(500, len(df_metric) * 40),
-        margin=dict(l=120, r=60, t=100, b=60),
-        legend_title_text='Xu hướng',
-        legend=dict(orientation="h", y=1.05, x=0.5),
-        yaxis={'categoryorder': 'array', 'categoryarray': df_metric['Phân loại'].tolist()}
+        margin=dict(l=120, r=60, t=80, b=60),
+        
+        showlegend=False, 
+        coloraxis_showscale=False, 
+        hovermode="y unified", 
+        
+        # Đảm bảo nền trong suốt
+        plot_bgcolor='rgba(0,0,0,0)', 
+        paper_bgcolor='rgba(0,0,0,0)',
     )
 
+    # Cập nhật trục X, Y (Để Plotly tự chọn màu Trắng/Đen)
+    fig.update_xaxes(
+        showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)', 
+        showline=True, linewidth=1
+    )
+    
+    fig.update_yaxes(
+        showgrid=False
+    )
+    
     # Thêm đường mốc 0%
-    fig.add_vline(x=0, line_width=1.5, line_dash="dash", line_color="gray")
+    fig.add_vline(x=0, line_width=2.0, line_dash="solid", line_color="#636466") 
 
-    # Giới hạn trục x để tránh bị cắt mất phần nhãn
-    try:
-        x_min = df_metric[growth_type].min()
-        x_max = df_metric[growth_type].max()
-        pad = (x_max - x_min) * 0.15 if not np.isnan(x_min) and not np.isnan(x_max) else 1
-        fig.update_xaxes(range=[x_min - pad, x_max + pad])
-    except Exception as e:
-        print(f"⚠️ Error setting x-axis range: {e}")
+    # ... (Code cho X-range) ...
 
-    print("✅ Industry growth chart generated successfully.")
+    print("✅ Industry growth chart (V15 - Final Robust Design) generated successfully.")
     return fig
-
 
 def analyze_top_10_stocks(df_merged: pd.DataFrame, current_year: int, current_quarter: str, top_n: int = 10) -> Dict[str, pd.DataFrame]:
     print("\n--- Starting Top 10 Analysis (Optimized) ---")
@@ -465,12 +567,15 @@ def analyze_top_10_stocks(df_merged: pd.DataFrame, current_year: int, current_qu
 def classify_market_cap(vonhoa):
     if pd.isna(vonhoa):
         return "Unknown"
-    if vonhoa >= 10_000:     # >= 10,000 tỷ
+    if vonhoa >= 10_000_000:     # >= 10,000 tỷ
         return "BigCap"
-    elif vonhoa >= 1_000:    # từ 1,000 – 10,000 tỷ
+    elif vonhoa >= 1_000_000:    # từ 1,000 – 10,000 tỷ
         return "MidCap"
     else:                    # < 1,000 tỷ
         return "SmallCap"
+
+# --- TRONG utils_optimized.py ---
+# THAY THẾ TOÀN BỘ HÀM NÀY
 
 def display_top_bottom_with_cap_filter(
     st,
@@ -480,9 +585,6 @@ def display_top_bottom_with_cap_filter(
     selected_cap_group: str = "Tất cả",
     metric_options: dict = None
 ):
-    """
-    Hiển thị Top/Bottom theo giá trị Q, YTD, YoY và YTD Growth (%) với dữ liệu đã tính sẵn trong top_results.
-    """
 
     vn_name = metric_options.get(metric_col, metric_col) if metric_options else metric_col
 
@@ -495,24 +597,19 @@ def display_top_bottom_with_cap_filter(
 
     def prepare_df(df, label, val_col_name):
         if df is None or df.empty:
-            return pd.DataFrame(columns=['MaCoPhieu', 'VonHoa', val_col_name])
+            return pd.DataFrame(columns=['MaCoPhieu', 'VonHoa', 'Giá trị'])
         
         df_disp = df.copy()
-        
-        # Đổi tên cột giá trị thành 'Giá trị' để chuẩn hóa
         df_disp = df_disp.rename(columns={val_col_name: 'Giá trị'})
         
-        # Format giá trị
         if label in ["YoY", "YTD_Growth"]:
             df_disp['Giá trị'] = df_disp['Giá trị'].apply(lambda x: f"{x*100:.2f}%" if pd.notna(x) else "N/A")
         else:
             df_disp['Giá trị'] = df_disp['Giá trị'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "N/A")
 
-        # Format Vốn hóa
         if 'VonHoa' in df_disp.columns:
             df_disp['VonHoa'] = df_disp['VonHoa'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "N/A")
         
-        # Sắp xếp lại cột
         return df_disp[['MaCoPhieu', 'VonHoa', 'Giá trị']]
 
     def style_growth(val):
@@ -529,7 +626,6 @@ def display_top_bottom_with_cap_filter(
         df_top_raw = top_results.get(top_key)
         df_bottom_raw = top_results.get(bottom_key)
 
-        # --- FIX: Áp dụng bộ lọc vốn hóa ---
         if selected_cap_group != "Tất cả":
             if df_top_raw is not None and not df_top_raw.empty:
                 df_top_raw['CapGroup'] = df_top_raw['VonHoa'].apply(classify_market_cap)
@@ -538,9 +634,8 @@ def display_top_bottom_with_cap_filter(
                 df_bottom_raw['CapGroup'] = df_bottom_raw['VonHoa'].apply(classify_market_cap)
                 df_bottom_raw = df_bottom_raw[df_bottom_raw['CapGroup'] == selected_cap_group].drop(columns=['CapGroup'])
 
-        # Lấy tên cột giá trị (cột cuối cùng)
-        val_col_name_top = df_top_raw.columns[-1] if df_top_raw is not None else 'Giá trị'
-        val_col_name_bottom = df_bottom_raw.columns[-1] if df_bottom_raw is not None else 'Giá trị'
+        val_col_name_top = df_top_raw.columns[-1] if df_top_raw is not None and not df_top_raw.empty else 'Giá trị'
+        val_col_name_bottom = df_bottom_raw.columns[-1] if df_bottom_raw is not None and not df_bottom_raw.empty else 'Giá trị'
         
         df_top_disp = prepare_df(df_top_raw, label, val_col_name_top)
         df_bottom_disp = prepare_df(df_bottom_raw, label, val_col_name_bottom)
@@ -566,9 +661,7 @@ def display_top_bottom_with_cap_filter(
                 .set_table_styles([{'selector': 'th', 'props': [('background-color', '#cce5ff')]}]),
                 use_container_width=True
             )
-
-
-
+            
 # Function to get market totals
 def get_market_totals_latest(execute_sql_func, unit=1_000_000): # đổi tên để tránh trùng lặp
     query_total_companies = """
@@ -919,8 +1012,6 @@ def fetch_data_in_batches(sql_connection_string, stock_codes_to_fetch, batch_siz
     else:
         return pd.DataFrame()
     
-# --- TRONG utils_optimized.py ---
-# (Hãy chắc chắn bạn đã có "import streamlit as st" ở đầu file)
 
 def generate_professional_growth_chart_v5(
     df_merged: pd.DataFrame,
@@ -933,30 +1024,42 @@ def generate_professional_growth_chart_v5(
     base_font_size: int = 11,
     title_font_size_multiplier: float = 1.6,
     axis_label_font_size_multiplier: float = 1.1,
-    market_line_color: str = 'rgba(0,0,0,0.9)', 
     market_line_width: float = 3.5,
     market_line_dash: str = 'dash',
     other_line_width: float = 2.0,
-    color_palette_name: str = 'Plotly',
     show_range_slider: bool = False,
     add_source_note: Optional[str] = "Nguồn: VSTDataFeed / Tính toán riêng"
 ) -> Optional[go.Figure]:
     
-    print(f"\n--- [V5.4 Final Axis Fix] Starting V5 cho: {metric_to_plot} ---")
+    # Đổi tên log thành V5.11 để dễ theo dõi
+    print(f"\n--- [V5.11 Tooltip Fix] Starting V5 cho: {metric_to_plot} ---")
     
     # --- Bước 1 & 2: Tính toán (Giữ nguyên) ---
     agg_growth_cols = [f'{col}_Agg_YoY_Growth_Abs' for col in cols_to_aggregate]
     plot_col_name = f'{metric_to_plot}_Agg_YoY_Growth_Abs'
     
     if metric_to_plot not in cols_to_aggregate:
-        print(f"   [V5.4] ⚠️ Error: '{metric_to_plot}' not in cols_to_aggregate.")
+        print(f"   [V5.11] ⚠️ Error: '{metric_to_plot}' not in cols_to_aggregate.")
         return None
     try:
         group_sum_nhom = df_merged.groupby(['NhomPhanTich', 'Nam', 'Quy'])[cols_to_aggregate].sum().reset_index()
         market_sum = df_merged.groupby(['Nam', 'Quy'])[cols_to_aggregate].sum().reset_index()
         market_sum['NhomPhanTich'] = 'Toàn thị trường'
-        df_combined_sum = pd.concat([group_sum_nhom, market_sum], ignore_index=True)
         
+        def get_sort_order(nhom):
+            if nhom == 'Ngân hàng': return 1
+            if nhom == 'Tài chính': return 2
+            if nhom == 'Phi tài chính': return 3
+            if nhom == 'Khác': return 4
+            if nhom == 'Toàn thị trường': return 5
+            return 6
+            
+        group_sum_nhom['SortOrder'] = group_sum_nhom['NhomPhanTich'].apply(get_sort_order)
+        market_sum['SortOrder'] = 5
+        
+        df_combined_sum = pd.concat([group_sum_nhom, market_sum], ignore_index=True)
+        df_combined_sum = df_combined_sum.sort_values(by=['SortOrder'])
+
         quarter_map = {'Q1': 1, 'Q2': 2, 'Q3': 3, 'Q4': 4}
         df_combined_sum['QuarterNum'] = df_combined_sum['Quy'].map(quarter_map)
         df_combined_sum_sorted = df_combined_sum.sort_values(by=['NhomPhanTich', 'Nam', 'QuarterNum'])
@@ -972,61 +1075,61 @@ def generate_professional_growth_chart_v5(
                     out=np.full_like(current_value, np.nan, dtype=np.float64),
                     where=(denominator!=0) & (~np.isnan(denominator))
                 )
-        df_agg_growth_summary = df_combined_sum_sorted[['NhomPhanTich', 'Nam', 'Quy'] + agg_growth_cols].reset_index(drop=True)
-        print("   [V5.4] Bước 1&2 (Tính toán) thành công.")
+        df_agg_growth_summary = df_combined_sum_sorted[['NhomPhanTich', 'Nam', 'Quy', 'SortOrder'] + agg_growth_cols].reset_index(drop=True)
+        print("   [V5.11] Bước 1&2 (Tính toán) thành công.")
     except Exception as e:
-        print(f"   [V5.4] ❌ Error in growth calculation: {e}")
+        print(f"   [V5.11] ❌ Error in growth calculation: {e}")
         return None
 
     # --- Bước 3: Chuẩn bị dữ liệu (Lọc theo kỳ) ---
-    print(f"   [V5.4] Step 3: Preparing plot data... Ending at {select_quarter} {select_year} for {lookback_periods} periods.")
+    print(f"   [V5.11] Step 3: Preparing plot data... Ending at {select_quarter} {select_year} for {lookback_periods} periods.")
     try:
         df_agg_growth_summary['TimeStr'] = df_agg_growth_summary['Nam'].astype(str) + '-' + df_agg_growth_summary['Quy']
-        df_agg_growth_summary['TimePeriod'] = pd.PeriodIndex(df_agg_growth_summary['TimeStr'], freq='Q').to_timestamp(how='end')
-        df_plot_agg = df_agg_growth_summary.sort_values(by=['NhomPhanTich', 'TimePeriod'])
+        
+        # =======================================================
+        # --- SỬA LỖI TOOLTIP (TỪ 'end' SANG 'start') ---
+        # (Dữ liệu Q3 2025 sẽ là '2025-07-01' thay vì '2025-09-30')
+        df_agg_growth_summary['TimePeriod'] = pd.PeriodIndex(df_agg_growth_summary['TimeStr'], freq='Q').to_timestamp(how='start')
+        # =======================================================
+
+        df_plot_agg = df_agg_growth_summary.sort_values(by=['SortOrder', 'TimePeriod'])
         
         all_periods_ts_df = df_plot_agg[(df_plot_agg['NhomPhanTich'] == 'Toàn thị trường')]
         if all_periods_ts_df.empty:
-            print("   [V5.4] ❌ LỖI: Không tìm thấy 'Toàn thị trường' trong dữ liệu.")
+            print("   [V5.11] ❌ LỖI: Không tìm thấy 'Toàn thị trường' trong dữ liệu.")
             return None
             
         all_periods_ts = pd.to_datetime(all_periods_ts_df['TimePeriod'].sort_values().unique())
         
+        # Kỳ mục tiêu vẫn dùng 'end' để đảm bảo việc lọc (<=) là chính xác
+        # (Ví dụ: '2025-07-01' (TimePeriod) vẫn <= '2025-09-30' (target_ts))
         target_period_str = f"{select_year}-{select_quarter}"
-        target_ts = pd.Period(target_period_str, freq='Q').to_timestamp(how='end')
+        target_ts = pd.Period(target_period_str, freq='Q').to_timestamp(how='end') 
         
         all_periods_ts_filtered = all_periods_ts[all_periods_ts <= target_ts]
 
         if len(all_periods_ts_filtered) == 0:
-            print(f"   [V5.4] ⚠️ Không tìm thấy dữ liệu 'Toàn thị trường' cho kỳ {select_quarter} {select_year} hoặc sớm hơn.")
             periods_to_plot = all_periods_ts[-lookback_periods:]
         else:
             periods_to_plot = all_periods_ts_filtered[-lookback_periods:]
         
-        # =======================================================
-        # --- SỬA LỖI TRỤC X (TẠO BIẾN MỚI) ---
-        # Đây là danh sách các vạch chia (ticks) chúng ta THỰC SỰ muốn hiển thị
         axis_tickvals = periods_to_plot
-        # Và đây là nhãn cho các vạch chia đó
         axis_ticktext = [f"{t.year}\n{t.to_period('Q').strftime('Q%q')}" for t in pd.to_datetime(axis_tickvals)]
-        # =======================================================
         
         df_plot_agg_filtered = df_plot_agg[df_plot_agg['TimePeriod'].isin(periods_to_plot)].copy()
 
         if df_plot_agg_filtered.empty:
-            print("   [V5.4] ⚠️ LỖI: df_plot_agg_filtered BỊ RỖNG sau khi lọc (lỗi .isin).")
             return None
         
-        # SỬA LỖI return None (thay dropna bằng fillna)
         df_plot_agg_filtered[plot_col_name] = df_plot_agg_filtered[plot_col_name].fillna(0)
-        print(f"   [V5.4] Đã fillna(0) cho cột {plot_col_name}.")
+        print(f"   [V5.11] Đã fillna(0) cho cột {plot_col_name}.")
             
     except Exception as e:
-        print(f"   [V5.4] ❌ Error preparing plot data (Step 3): {e}")
+        print(f"   [V5.11] ❌ Error preparing plot data (Step 3): {e}")
         return None
 
-    # --- Bước 4: Vẽ biểu đồ (Phong cách Tối giản) ---
-    print(f"   [V5.4] Step 4: Plotting V5 (Minimalist) chart for '{metric_to_plot}'...")
+    # --- Bước 4: Vẽ biểu đồ (Giữ nguyên) ---
+    print(f"   [V5.11] Step 4: Plotting (4 Colors)...")
     try:
         metric_title = metric_to_plot.replace('DoanhThu', 'Doanh Thu ').replace('LoiNhuan', 'Lợi Nhuận ').replace('TruocThue', 'Trước Thuế ').replace('SauThue', 'Sau Thuế ')
         start_ts = df_plot_agg_filtered['TimePeriod'].min()
@@ -1034,68 +1137,59 @@ def generate_professional_growth_chart_v5(
         start_period_label = pd.Timestamp(start_ts).to_period('Q')
         end_period_label = pd.Timestamp(end_ts).to_period('Q')
         
-        try:
-            color_sequence = getattr(px.colors.qualitative, color_palette_name)
-        except AttributeError:
-            color_sequence = px.colors.qualitative.Plotly
+        brand_palette = [
+            '#1f77b4', # 1. Xanh dương
+            '#ff7f0e', # 2. Cam
+            '#2ca02c', # 3. Xanh lá
+            '#e377c2', # 4. Tím/Hồng
+            '#7f7f7f'  # 5. Xám (cho Toàn thị trường)
+        ]
 
         fig = px.line(
             df_plot_agg_filtered, x='TimePeriod', y=plot_col_name, color='NhomPhanTich',
-            color_discrete_sequence=color_sequence, 
+            color_discrete_sequence=brand_palette, 
             markers=True,          
-            #line_shape='linear',   # Giữ 'linear' (thẳng)
-            line_shape='spline',# <-- Đổi 'linear' TRỞ LẠI 'spline'
+            line_shape='spline',
             title=f'<b>Tăng trưởng Tổng {metric_title} YoY theo Nhóm Phân tích</b><br><sup><i>Phương pháp: (Hiện tại - Trước) / |Trước|, giai đoạn {start_period_label}-{end_period_label}</i></sup>',
-            labels={'TimePeriod': '', plot_col_name: 'Tăng trưởng YoY (%)', 'NhomPhanTich': ''},
-            template='plotly_white'
+            labels={'TimePeriod': '', 'plot_col_name': 'Tăng trưởng YoY (%)', 'NhomPhanTich': ''}
         )
         
         fig.update_layout(
-            font=dict(family=report_font, size=base_font_size, color='black'),
+            font=dict(family=report_font, size=base_font_size),
             title=dict(font_size=base_font_size * title_font_size_multiplier, x=0.05, xanchor='left'),
             xaxis_title=None,
-            yaxis_title=dict(font_size=base_font_size * axis_label_font_size_multiplier, standoff=10),
+            yaxis_title=None, 
             yaxis_tickformat='.0%', 
             hovermode="x unified",
-            legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1, font_size=base_font_size, bgcolor='rgba(255,255,255,0.6)'),
+            legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1, font_size=base_font_size),
             margin=dict(l=60, r=30, t=110, b=80),
-            plot_bgcolor='white', paper_bgcolor='white',
             annotations=[
                 dict(xref='paper', yref='paper', x=0, y=-0.2, showarrow=False,
                      text=add_source_note, font=dict(size=base_font_size * 0.9, color='grey'), align='left')
             ] if add_source_note else [],
             hoverlabel=dict(
-                bgcolor="white",
                 font_size=base_font_size,
                 font_family=report_font
             )
         )
         
-        # =======================================================
-        # --- SỬA LỖI TRỤC X HIỂN THỊ Q4 2025 ---
         fig.update_xaxes(
-            # Xóa dtick và tickformat
-            # dtick="M3", 
-            # tickformat="%Y\n%q", 
-            
-            # Thêm tickvals và ticktext
-            tickvals=axis_tickvals, # <-- SỬA LỖI
-            ticktext=axis_ticktext, # <-- SỬA LỖI
-            
+            tickvals=axis_tickvals, 
+            ticktext=axis_ticktext, 
             tickfont_size=base_font_size,
-            showgrid=False, showline=False,
+            showgrid=False, 
+            showline=False,
             rangeslider_visible=show_range_slider,
             showspikes=True, spikemode='across', spikedash='dot', spikethickness=1
-            # Xóa range (để tickvals kiểm soát)
-            # range=[start_ts, end_ts] 
         )
-        # =======================================================
         
         fig.update_yaxes(
             tickfont_size=base_font_size, 
-            showgrid=True, gridwidth=1, gridcolor='rgba(0, 0, 0, 0.05)',
+            showgrid=True, 
+            gridwidth=1, 
             showline=False, 
-            zeroline=True, zerolinewidth=2, zerolinecolor='rgba(0,0,0,0.8)',
+            zeroline=True, 
+            zerolinewidth=2, 
             showspikes=True, spikemode='across', spikedash='dot', spikethickness=1
         )
         
@@ -1104,14 +1198,14 @@ def generate_professional_growth_chart_v5(
             if trace_color_rgb and trace_color_rgb.startswith('rgb'):
                 fill_color_rgba = trace_color_rgb.replace('rgb', 'rgba').replace(')', ', 0.1)')
             else:
-                fill_color_rgba = 'rgba(128,128,128,0.1)'
+                fill_color_rgba = 'rgba(128,128,128,0.1)' 
             
             if trace.name == 'Toàn thị trường':
                 trace.update(
-                    line=dict(width=market_line_width, color=market_line_color, dash=market_line_dash),
+                    line=dict(width=market_line_width, dash=market_line_dash), 
                     hovertemplate='<b>Toàn thị trường</b><br>%{x|%YQ%q}: %{y:.1%}<extra></extra>',
                     fill='tozeroy',
-                    fillcolor='rgba(0,0,0,0.15)'
+                    fillcolor=fill_color_rgba 
                 )
             else:
                 trace.update(
@@ -1123,8 +1217,8 @@ def generate_professional_growth_chart_v5(
 
         fig.for_each_trace(apply_trace_styling)
         
-        print(f"   [V5.4] ✅ V5 (Minimalist+Filter) Chart plotting completed.")
+        print(f"   [V5.11] ✅ V5 (Tooltip Fix) Chart plotting completed.")
         return fig
     except Exception as e:
-        print(f"   [V5.4] ❌ Error in plotting V5 chart (Step 4): {e}")
+        print(f"   [V5.11] ❌ Error in plotting V5 chart (Step 4): {e}")
         return None
