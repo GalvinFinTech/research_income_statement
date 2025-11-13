@@ -6,6 +6,7 @@ from typing import List, Dict, Optional, Union
 import plotly.express as px
 import plotly.graph_objects as go
 
+
 # Function to get latest reporters with stats
 def get_latest_reporters_with_stats(sql_connection_string: str, current_year: int, current_quarter: str, term_type_filter: int = -1) -> pd.DataFrame:
     sql_query = f"""
@@ -972,12 +973,8 @@ def fetch_data_in_batches(sql_connection_string, stock_codes_to_fetch, batch_siz
     else:
         return pd.DataFrame()
     
-import streamlit as st # <-- Hãy chắc chắn bạn đã import
-import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-import plotly.express as px
-from typing import List, Dict, Optional, Union
+# --- TRONG utils_optimized.py ---
+# (Hãy chắc chắn bạn đã có "import streamlit as st" ở đầu file)
 
 def generate_professional_growth_chart_v5(
     df_merged: pd.DataFrame,
@@ -999,14 +996,14 @@ def generate_professional_growth_chart_v5(
     add_source_note: Optional[str] = "Nguồn: VSTDataFeed / Tính toán riêng"
 ) -> Optional[go.Figure]:
     
-    print(f"\n--- [V5.1 Fixed] Starting V5 (Sử dụng NhomPhanTich có sẵn) cho: {metric_to_plot} ---")
+    print(f"\n--- [V5.4 Final Axis Fix] Starting V5 cho: {metric_to_plot} ---")
     
     # --- Bước 1 & 2: Tính toán (Giữ nguyên) ---
     agg_growth_cols = [f'{col}_Agg_YoY_Growth_Abs' for col in cols_to_aggregate]
     plot_col_name = f'{metric_to_plot}_Agg_YoY_Growth_Abs'
     
     if metric_to_plot not in cols_to_aggregate:
-        print(f"   [V5.1] ⚠️ Error: '{metric_to_plot}' not in cols_to_aggregate.")
+        print(f"   [V5.4] ⚠️ Error: '{metric_to_plot}' not in cols_to_aggregate.")
         return None
     try:
         group_sum_nhom = df_merged.groupby(['NhomPhanTich', 'Nam', 'Quy'])[cols_to_aggregate].sum().reset_index()
@@ -1030,64 +1027,62 @@ def generate_professional_growth_chart_v5(
                     where=(denominator!=0) & (~np.isnan(denominator))
                 )
         df_agg_growth_summary = df_combined_sum_sorted[['NhomPhanTich', 'Nam', 'Quy'] + agg_growth_cols].reset_index(drop=True)
-        print("   [V5.1] Bước 1&2 (Tính toán) thành công.")
+        print("   [V5.4] Bước 1&2 (Tính toán) thành công.")
     except Exception as e:
-        print(f"   [V5.1] ❌ Error in growth calculation: {e}")
+        print(f"   [V5.4] ❌ Error in growth calculation: {e}")
         return None
 
-    # =======================================================
-    # --- SỬA LỖI LOGIC BƯỚC 3 (Lọc thời gian) ---
-    # =======================================================
-    print(f"   [V5.1] Step 3: Preparing plot data... Ending at {select_quarter} {select_year} for {lookback_periods} periods.")
+    # --- Bước 3: Chuẩn bị dữ liệu (Lọc theo kỳ) ---
+    print(f"   [V5.4] Step 3: Preparing plot data... Ending at {select_quarter} {select_year} for {lookback_periods} periods.")
     try:
-        # 1. Tạo TimePeriod (như cũ)
         df_agg_growth_summary['TimeStr'] = df_agg_growth_summary['Nam'].astype(str) + '-' + df_agg_growth_summary['Quy']
         df_agg_growth_summary['TimePeriod'] = pd.PeriodIndex(df_agg_growth_summary['TimeStr'], freq='Q').to_timestamp(how='end')
-        
-        # 2. Sắp xếp theo TimePeriod (quan trọng)
         df_plot_agg = df_agg_growth_summary.sort_values(by=['NhomPhanTich', 'TimePeriod'])
         
-        # 3. Xác định kỳ kết thúc (Target Timestamp)
-        target_period_str = f"{select_year}-{select_quarter}"
-        target_ts = pd.Period(target_period_str, freq='Q').to_timestamp(how='end')
-        print(f"   [V5.1] Lọc dữ liệu <= {target_ts}")
-
-        # 4. Lọc TẤT CẢ dữ liệu (bao gồm tất cả NhomPhanTich) <= kỳ mục tiêu
-        df_filtered_by_date = df_plot_agg[df_plot_agg['TimePeriod'] <= target_ts]
-        
-        if df_filtered_by_date.empty:
-            print(f"   [V5.1] ⚠️ LỖI: Không có dữ liệu nào (cho tất cả các nhóm) <= {target_ts}.")
-            return None
-
-        # 5. Lấy N kỳ cuối cùng (theo từng nhóm)
-        # Bằng cách groupby, rồi lấy N kỳ cuối của mỗi nhóm, sau đó ghép lại
-        df_plot_agg_filtered = df_filtered_by_date.groupby('NhomPhanTich').tail(lookback_periods)
-        
-        print(f"   [V5.1] Đã lọc lấy {lookback_periods} kỳ cuối cùng cho mỗi nhóm.")
-        
-        # =======================================================
-        # --- SỬA LỖI dropna() (Nguyên nhân chính gây return None) ---
-        # =======================================================
-        # Thay vì xóa các hàng có tăng trưởng NaN (ví dụ: do chia cho 0),
-        # chúng ta sẽ coi mức tăng trưởng đó là 0% để biểu đồ vẫn vẽ được.
-        df_plot_agg_filtered[plot_col_name] = df_plot_agg_filtered[plot_col_name].fillna(0)
-        print(f"   [V5.1] Đã fillna(0) cho cột {plot_col_name} để xử lý lỗi chia cho 0.")
-        
-        # Kiểm tra rỗng (chỉ là dự phòng)
-        if df_plot_agg_filtered.empty:
-            print(f"   [V5.1] ⚠️ LỖI: DataFrame vẫn rỗng sau khi lọc.")
+        all_periods_ts_df = df_plot_agg[(df_plot_agg['NhomPhanTich'] == 'Toàn thị trường')]
+        if all_periods_ts_df.empty:
+            print("   [V5.4] ❌ LỖI: Không tìm thấy 'Toàn thị trường' trong dữ liệu.")
             return None
             
+        all_periods_ts = pd.to_datetime(all_periods_ts_df['TimePeriod'].sort_values().unique())
+        
+        target_period_str = f"{select_year}-{select_quarter}"
+        target_ts = pd.Period(target_period_str, freq='Q').to_timestamp(how='end')
+        
+        all_periods_ts_filtered = all_periods_ts[all_periods_ts <= target_ts]
+
+        if len(all_periods_ts_filtered) == 0:
+            print(f"   [V5.4] ⚠️ Không tìm thấy dữ liệu 'Toàn thị trường' cho kỳ {select_quarter} {select_year} hoặc sớm hơn.")
+            periods_to_plot = all_periods_ts[-lookback_periods:]
+        else:
+            periods_to_plot = all_periods_ts_filtered[-lookback_periods:]
+        
+        # =======================================================
+        # --- SỬA LỖI TRỤC X (TẠO BIẾN MỚI) ---
+        # Đây là danh sách các vạch chia (ticks) chúng ta THỰC SỰ muốn hiển thị
+        axis_tickvals = periods_to_plot
+        # Và đây là nhãn cho các vạch chia đó
+        axis_ticktext = [f"{t.year}\n{t.to_period('Q').strftime('Q%q')}" for t in pd.to_datetime(axis_tickvals)]
+        # =======================================================
+        
+        df_plot_agg_filtered = df_plot_agg[df_plot_agg['TimePeriod'].isin(periods_to_plot)].copy()
+
+        if df_plot_agg_filtered.empty:
+            print("   [V5.4] ⚠️ LỖI: df_plot_agg_filtered BỊ RỖNG sau khi lọc (lỗi .isin).")
+            return None
+        
+        # SỬA LỖI return None (thay dropna bằng fillna)
+        df_plot_agg_filtered[plot_col_name] = df_plot_agg_filtered[plot_col_name].fillna(0)
+        print(f"   [V5.4] Đã fillna(0) cho cột {plot_col_name}.")
+            
     except Exception as e:
-        print(f"   [V5.1] ❌ Error preparing plot data (Step 3): {e}")
+        print(f"   [V5.4] ❌ Error preparing plot data (Step 3): {e}")
         return None
 
-    # --- Bước 4: Vẽ biểu đồ (Giữ nguyên) ---
-    print(f"   [V5.1] Step 4: Plotting V5 (Minimalist) chart for '{metric_to_plot}'...")
+    # --- Bước 4: Vẽ biểu đồ (Phong cách Tối giản) ---
+    print(f"   [V5.4] Step 4: Plotting V5 (Minimalist) chart for '{metric_to_plot}'...")
     try:
         metric_title = metric_to_plot.replace('DoanhThu', 'Doanh Thu ').replace('LoiNhuan', 'Lợi Nhuận ').replace('TruocThue', 'Trước Thuế ').replace('SauThue', 'Sau Thuế ')
-        
-        # Lấy kỳ bắt đầu/kết thúc TỪ DỮ LIỆU ĐÃ LỌC
         start_ts = df_plot_agg_filtered['TimePeriod'].min()
         end_ts = df_plot_agg_filtered['TimePeriod'].max()
         start_period_label = pd.Timestamp(start_ts).to_period('Q')
@@ -1102,7 +1097,7 @@ def generate_professional_growth_chart_v5(
             df_plot_agg_filtered, x='TimePeriod', y=plot_col_name, color='NhomPhanTich',
             color_discrete_sequence=color_sequence, 
             markers=True,          
-            line_shape='spline',   
+            line_shape='linear',   # Giữ 'linear' (thẳng)
             title=f'<b>Tăng trưởng Tổng {metric_title} YoY theo Nhóm Phân tích</b><br><sup><i>Phương pháp: (Hiện tại - Trước) / |Trước|, giai đoạn {start_period_label}-{end_period_label}</i></sup>',
             labels={'TimePeriod': '', plot_col_name: 'Tăng trưởng YoY (%)', 'NhomPhanTich': ''},
             template='plotly_white'
@@ -1129,12 +1124,25 @@ def generate_professional_growth_chart_v5(
             )
         )
         
+        # =======================================================
+        # --- SỬA LỖI TRỤC X HIỂN THỊ Q4 2025 ---
         fig.update_xaxes(
-            dtick="M3", tickformat="%Y\n%q", tickfont_size=base_font_size,
+            # Xóa dtick và tickformat
+            # dtick="M3", 
+            # tickformat="%Y\n%q", 
+            
+            # Thêm tickvals và ticktext
+            tickvals=axis_tickvals, # <-- SỬA LỖI
+            ticktext=axis_ticktext, # <-- SỬA LỖI
+            
+            tickfont_size=base_font_size,
             showgrid=False, showline=False,
             rangeslider_visible=show_range_slider,
             showspikes=True, spikemode='across', spikedash='dot', spikethickness=1
+            # Xóa range (để tickvals kiểm soát)
+            # range=[start_ts, end_ts] 
         )
+        # =======================================================
         
         fig.update_yaxes(
             tickfont_size=base_font_size, 
@@ -1168,8 +1176,8 @@ def generate_professional_growth_chart_v5(
 
         fig.for_each_trace(apply_trace_styling)
         
-        print(f"   [V5.1] ✅ V5 (Minimalist+Filter) Chart plotting completed.")
+        print(f"   [V5.4] ✅ V5 (Minimalist+Filter) Chart plotting completed.")
         return fig
     except Exception as e:
-        print(f"   [V5.1] ❌ Error in plotting V5 chart: {e}")
+        print(f"   [V5.4] ❌ Error in plotting V5 chart (Step 4): {e}")
         return None
