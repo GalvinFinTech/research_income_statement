@@ -6,60 +6,6 @@ from typing import List, Dict, Optional, Union
 import plotly.express as px
 import plotly.graph_objects as go
 
-
-# Function to get latest reporters with stats
-def get_latest_reporters_with_stats(sql_connection_string: str, current_year: int, current_quarter: str, term_type_filter: int = -1) -> pd.DataFrame:
-    sql_query = f"""
-    DECLARE @CurrentYear int = {current_year};
-    DECLARE @CurrentQuarter varchar(2) = '{current_quarter}';
-    DECLARE @TermTypeFilter int = {term_type_filter};
-
-    SELECT 
-        c.CompanyCode AS MaCoPhieu,
-        c.FullName AS TenCongTy,
-        bt.Description AS LoaiHinhCongTy,
-        ci.Name AS TenNganh,
-        ci2.Name AS TenNganhCon,
-        rd.YearPeriod AS NamBaoCao,
-        rt.TermCode AS KyBaoCao,
-        rd.LastUpdate AS NgayCongBo,
-        rd.MarketCap AS VonHoa 
-    FROM VSTDataFeed.dbo.Company c WITH (NOLOCK)
-    INNER JOIN VSTDataFeed.dbo.ReportData rd WITH (NOLOCK) 
-        ON rd.CompanyID = c.CompanyID
-    INNER JOIN VSTDataFeed.dbo.ReportTerm rt WITH (NOLOCK) 
-        ON rt.ReportTermID = rd.ReportTermID
-    LEFT JOIN VSTDataFeed.dbo.BusinessType bt WITH (NOLOCK) 
-        ON bt.BusinessTypeID = c.CompanyType + 1
-    LEFT JOIN VSTDataFeed.dbo.ChannelIndustry ci WITH (NOLOCK) 
-        ON ci.IndustryID = c.IndustryID
-    LEFT JOIN VSTDataFeed.dbo.ChannelIndustry ci2 WITH (NOLOCK) 
-        ON ci2.IndustryID = c.SubIndustry
-    WHERE 
-        c.Status = 1 
-        AND c.CatID IN (1, 2, 5)
-        AND rd.IsUnited IN (0, 1)
-        AND rd.YearPeriod = @CurrentYear
-        AND (
-            (@TermTypeFilter = 2 AND rt.TermCode = @CurrentQuarter) 
-            OR (@TermTypeFilter = 1 AND rt.ReportTermTypeID = 1) 
-            OR @TermTypeFilter = -1
-        )
-    GROUP BY 
-        c.CompanyCode, c.FullName, bt.Description, ci.Name, ci2.Name,
-        rd.YearPeriod, rt.TermCode, rd.LastUpdate, rd.MarketCap
-    ORDER BY rd.LastUpdate DESC;
-    """
-    try:
-        conn = pyodbc.connect(sql_connection_string)
-        df = pd.read_sql(sql_query, conn)
-        conn.close()
-        return df
-    except Exception as e:
-        print(f"Error executing SQL query: {e}")
-        return pd.DataFrame()
-
-# Function to get core financials by list
 # Function to get core financials by list
 def get_core_financials_by_list(sql_connection_string: str, stock_codes_list: List[str], start_year: int = 2020, unit: int = 1000000) -> pd.DataFrame:
     if not stock_codes_list:
